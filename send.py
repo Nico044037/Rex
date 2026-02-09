@@ -5,7 +5,7 @@ from discord.ext import commands
 from discord import app_commands
 
 TOKEN = os.getenv("DISCORD_TOKEN")
-GUILD_ID = 1449298346425585768
+GUILD_ID = 1402852587325358232
 
 # ======================
 # INTENTS
@@ -179,5 +179,6 @@ async def on_message_delete(message: discord.Message):
 # ======================
 if not TOKEN:
     raise RuntimeError("DISCORD_TOKEN environment variable not set")
+
 
 bot.run(TOKEN)
