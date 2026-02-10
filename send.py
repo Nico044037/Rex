@@ -1,14 +1,14 @@
 import os
 import json
+import asyncio
 import discord
 from discord.ext import commands
 from discord import app_commands
-import asyncio
 
 # ================= BASIC CONFIG =================
 TOKEN = os.getenv("DISCORD_TOKEN")
 
-# Change this OR set GUILD_ID in Railway
+# Change here OR set GUILD_ID in Railway
 MAIN_GUILD_ID = int(os.getenv("GUILD_ID", "1452967364470505565"))
 
 DATA_FILE = "data.json"
@@ -26,7 +26,13 @@ bot = commands.Bot(
 # ================= STORAGE =================
 if not os.path.exists(DATA_FILE):
     with open(DATA_FILE, "w") as f:
-        json.dump({"welcome_channel": None, "autoroles": []}, f)
+        json.dump(
+            {
+                "welcome_channel": None,
+                "autoroles": []
+            },
+            f
+        )
 
 with open(DATA_FILE, "r") as f:
     data = json.load(f)
@@ -84,28 +90,28 @@ async def on_member_join(member: discord.Member):
     if member.guild.id != MAIN_GUILD_ID:
         return
 
-    # small delay so Discord fully registers the member
+    # Delay so Discord fully registers the member
     await asyncio.sleep(2)
 
-    # ===== DM RULES =====
+    # DM rules
     try:
         await member.send(embed=rules_embed())
         print(f"📨 DM sent to {member}")
     except discord.Forbidden:
-        print(f"❌ DM FAILED (DMs closed): {member}")
+        print(f"❌ DM blocked (user settings): {member}")
     except Exception as e:
-        print(f"❌ DM ERROR for {member}: {e}")
+        print(f"❌ DM error for {member}: {e}")
 
-    # ===== AUTOROLES =====
+    # Autoroles
     for role_id in autoroles:
         role = member.guild.get_role(role_id)
         if role:
             try:
                 await member.add_roles(role)
             except discord.Forbidden:
-                print(f"❌ Missing permission to add role {role.name}")
+                print(f"❌ Missing permission for role {role.name}")
 
-    # ===== WELCOME MESSAGE =====
+    # Welcome message
     if welcome_channel_id:
         channel = member.guild.get_channel(welcome_channel_id)
         if channel:
@@ -130,6 +136,7 @@ async def slash_setup(interaction: discord.Interaction, channel: discord.TextCha
         ephemeral=True
     )
 
+# PREFIX SETUP → works for BOTH !setup AND ?setup
 @bot.command()
 @commands.has_permissions(manage_guild=True)
 async def setup(ctx, channel: discord.TextChannel):
@@ -180,7 +187,11 @@ async def help(ctx):
 
     embed.add_field(
         name="🔨 Moderation",
-        value="`?kick @user [reason]`\n`?role add/remove @user @role`",
+        value=(
+            "`?kick @user [reason]`\n"
+            "`?role add @user @role`\n"
+            "`?role remove @user @role`"
+        ),
         inline=False
     )
 
