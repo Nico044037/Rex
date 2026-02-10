@@ -3,6 +3,7 @@ import discord
 from discord.ext import commands
 from discord import app_commands
 
+# ================= BASIC CONFIG =================
 TOKEN = os.getenv("DISCORD_TOKEN")
 GUILD_ID = 1452967364470505565
 
@@ -10,11 +11,15 @@ intents = discord.Intents.default()
 intents.message_content = True
 intents.members = True
 
-bot = commands.Bot(command_prefix=["!", "?"], intents=intents)
+bot = commands.Bot(
+    command_prefix=["!", "?"],
+    intents=intents,
+    help_command=None  # IMPORTANT: disable default help
+)
 
-# ================= CONFIG =================
+# ================= STORAGE =================
 welcome_channel_id: int | None = None
-autoroles: set[int] = set()  # stores role IDs
+autoroles: set[int] = set()
 
 # ================= EMBEDS =================
 def rules_embed():
@@ -35,6 +40,19 @@ def rules_embed():
             "🔐 Do not share personal information\n"
             "🧭 Use the correct channels\n"
             "👮 Staff decisions are final"
+        ),
+        inline=False
+    )
+
+    embed.add_field(
+        name="🎮 Minecraft Rules",
+        value=(
+            "❌ No hacking or cheats\n"
+            "🐞 No exploiting bugs\n"
+            "💬 No toxic behavior\n"
+            "👤 No alt accounts without approval\n"
+            "💸 No scamming or RMT\n"
+            "📕 Follow Minecraft EULA"
         ),
         inline=False
     )
@@ -72,7 +90,7 @@ async def on_member_join(member: discord.Member):
 
     # Welcome message
     if welcome_channel_id:
-        channel = bot.get_channel(welcome_channel_id)
+        channel = member.guild.get_channel(welcome_channel_id)
         if channel:
             await channel.send(
                 f"👋 Welcome {member.mention}!\n"
@@ -107,8 +125,8 @@ async def send(ctx):
     await ctx.send(embed=rules_embed())
 
 # ================= HELP =================
-@bot.command(name="help")
-async def help_command(ctx):
+@bot.command()
+async def help(ctx):
     embed = discord.Embed(
         title="📖 Help Menu",
         description="Dyno-style commands",
@@ -135,7 +153,11 @@ async def help_command(ctx):
 
     embed.add_field(
         name="🔨 Moderation",
-        value="`?kick @user [reason]`\n`?role add/remove @user @role`",
+        value=(
+            "`?kick @user [reason]`\n"
+            "`?role add @user @role`\n"
+            "`?role remove @user @role`"
+        ),
         inline=False
     )
 
@@ -169,10 +191,10 @@ async def role(ctx, action: str, member: discord.Member, role: discord.Role):
 async def autorole(ctx, action: str, role: discord.Role):
     if action.lower() == "add":
         autoroles.add(role.id)
-        await ctx.send(f"✅ {role.mention} added to autoroles")
+        await ctx.send(f"✅ Added {role.mention} to autorole list")
     elif action.lower() == "remove":
         autoroles.discard(role.id)
-        await ctx.send(f"❌ {role.mention} removed from autoroles")
+        await ctx.send(f"❌ Removed {role.mention} from autorole list")
     else:
         await ctx.send("❌ Use: `?autorole add @role` or `?autorole remove @role`")
 
