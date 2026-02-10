@@ -6,7 +6,7 @@ from discord import app_commands
 
 # ================= BASIC CONFIG =================
 TOKEN = os.getenv("DISCORD_TOKEN")
-GUILD_ID = 1452967364470505565
+GUILD_ID = 1402852587325358232
 DATA_FILE = "data.json"
 
 intents = discord.Intents.default()
@@ -185,3 +185,4 @@ if not TOKEN:
     raise RuntimeError("DISCORD_TOKEN not set")
 
 bot.run(TOKEN)
+
