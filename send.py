@@ -47,7 +47,7 @@ async def on_ready():
     bot.add_view(TicketView())
     bot.add_view(CloseView())
 
-    print("Bot ready (AUTO VERIFY VERSION)")
+    print("Bot ready (FULL VERSION)")
 
 async def get_settings(guild_id):
     row = await db.fetchrow("SELECT * FROM guild_settings WHERE guild_id=$1", guild_id)
@@ -58,6 +58,28 @@ async def get_settings(guild_id):
 
 async def update_setting(guild_id, column, value):
     await db.execute(f"UPDATE guild_settings SET {column}=$1 WHERE guild_id=$2", value, guild_id)
+
+# ================= LOG FUNCTION =================
+async def log(guild, embed, file=None):
+    settings = await get_settings(guild.id)
+    if settings["logs_channel"]:
+        ch = guild.get_channel(settings["logs_channel"])
+        if ch:
+            await ch.send(embed=embed, file=file)
+
+# ================= RULES =================
+def rules_embed():
+    e = discord.Embed(
+        title="📜 Server Rules",
+        description="By staying in this server you agree to follow these rules.",
+        color=discord.Color.red()
+    )
+    e.add_field(name="Respect", value="No harassment or hate.", inline=False)
+    e.add_field(name="No Spam", value="No flooding channels.", inline=False)
+    e.add_field(name="No NSFW", value="Keep content safe.", inline=False)
+    e.add_field(name="No Advertising", value="No promotion.", inline=False)
+    e.set_footer(text="Breaking rules may result in punishment.")
+    return e
 
 # ================= AUTO VERIFY PANEL =================
 async def try_send_verify_panel(guild):
@@ -72,20 +94,7 @@ async def try_send_verify_panel(guild):
                 view=VerifyView()
             )
 
-# ================= RULES =================
-def rules_embed():
-    e = discord.Embed(
-        title="📜 Server Rules",
-        description="By staying you agree to follow these rules.",
-        color=discord.Color.red()
-    )
-    e.add_field(name="Respect", value="No harassment.", inline=False)
-    e.add_field(name="No Spam", value="No flooding.", inline=False)
-    e.add_field(name="No NSFW", value="Keep content safe.", inline=False)
-    e.add_field(name="No Advertising", value="No promotion.", inline=False)
-    return e
-
-# ================= VERIFY SYSTEM =================
+# ================= VERIFY =================
 class VerifyView(View):
     def __init__(self): super().__init__(timeout=None)
 
@@ -98,83 +107,64 @@ class VerifyView(View):
 
         await interaction.user.add_roles(role)
         await interaction.response.send_message(embed=success("Verified","Access granted."),ephemeral=True)
+        await log(interaction.guild, log_embed("User Verified", interaction.user.mention))
 
-# ================= TICKETS =================
-async def create_transcript(channel):
-    messages = []
-    async for msg in channel.history(limit=None, oldest_first=True):
-        messages.append(f"[{msg.created_at}] {msg.author}: {msg.content}")
-    data = "\n".join(messages)
-    return discord.File(io.BytesIO(data.encode()), filename=f"{channel.name}.txt")
+# ================= EVENTS =================
+@bot.event
+async def on_member_join(member):
+    try:
+        await member.send(embed=rules_embed())
+    except:
+        pass
 
-class CloseModal(Modal):
-    def __init__(self, channel):
-        super().__init__(title="Close Ticket")
-        self.channel = channel
-        self.reason = TextInput(label="Reason", style=discord.TextStyle.paragraph)
-        self.add_item(self.reason)
+    settings = await get_settings(member.guild.id)
 
-    async def on_submit(self, interaction):
-        transcript = await create_transcript(self.channel)
-        await log(interaction.guild,
-                  log_embed("Ticket Closed",
-                            f"{self.channel.name}\nReason: {self.reason.value}"),
-                  transcript)
-        await self.channel.delete()
-
-class CloseView(View):
-    def __init__(self): super().__init__(timeout=None)
-
-    @discord.ui.button(label="Close Ticket", style=discord.ButtonStyle.danger)
-    async def close_ticket(self, interaction, button):
-        owner = ticket_owners.get(interaction.channel.id)
-        if interaction.user.id != owner and not interaction.user.guild_permissions.administrator:
-            return await interaction.response.send_message(embed=error("Denied","Only owner/admin."),ephemeral=True)
-        await interaction.response.send_modal(CloseModal(interaction.channel))
-
-class TicketView(View):
-    def __init__(self): super().__init__(timeout=None)
-
-    @discord.ui.button(label="Create Ticket", style=discord.ButtonStyle.primary)
-    async def create_ticket(self, interaction, button):
-        settings = await get_settings(interaction.guild.id)
-        category = interaction.guild.get_channel(settings["ticket_category"])
-        if not category:
-            return await interaction.response.send_message(embed=error("Error","Ticket system not set."),ephemeral=True)
-
-        channel = await interaction.guild.create_text_channel(
-            f"ticket-{interaction.user.name}",
-            category=category
-        )
-
-        ticket_owners[channel.id] = interaction.user.id
-
-        await channel.set_permissions(interaction.guild.default_role, view_channel=False)
-        await channel.set_permissions(interaction.user, view_channel=True)
-
-        await channel.send(embed=info("Ticket Opened","Describe your issue."),view=CloseView())
-        await interaction.response.send_message(embed=success("Ticket Created",channel.mention),ephemeral=True)
-
-# ================= LOG FUNCTION =================
-async def log(guild, embed, file=None):
-    settings = await get_settings(guild.id)
-    if settings["logs_channel"]:
-        ch = guild.get_channel(settings["logs_channel"])
+    if settings["welcome_channel"]:
+        ch = member.guild.get_channel(settings["welcome_channel"])
         if ch:
-            await ch.send(embed=embed, file=file)
+            await ch.send(embed=success("New Member Joined", member.mention))
 
-# ================= SETUP =================
+    await log(member.guild, log_embed("Member Joined", member.mention))
+
+@bot.event
+async def on_member_remove(member):
+    await log(member.guild, log_embed("Member Left", str(member)))
+
+@bot.event
+async def on_message_delete(message):
+    if message.author.bot: return
+    await log(message.guild,
+              log_embed("Message Deleted",
+                        f"{message.author} in {message.channel.mention}\n{message.content}"))
+
+# ================= SETUP COMMANDS =================
 @bot.group()
 async def setup(ctx): pass
 
 @setup.command()
-async def verify(ctx, channel:discord.TextChannel):
+async def welcome(ctx, channel: discord.TextChannel):
+    await update_setting(ctx.guild.id, "welcome_channel", channel.id)
+    await ctx.send(embed=success("Welcome Channel Set", channel.mention))
+
+@setup.command()
+async def logs(ctx, channel: discord.TextChannel):
+    await update_setting(ctx.guild.id, "logs_channel", channel.id)
+    await ctx.send(embed=success("Logs Channel Set", channel.mention))
+
+@setup.command()
+async def rules(ctx, channel: discord.TextChannel):
+    await update_setting(ctx.guild.id, "rules_channel", channel.id)
+    await channel.send(embed=rules_embed())
+    await ctx.send(embed=success("Rules Sent", channel.mention))
+
+@setup.command()
+async def verify(ctx, channel: discord.TextChannel):
     await update_setting(ctx.guild.id,"verify_channel",channel.id)
     await ctx.send(embed=success("Verify Channel Set",channel.mention))
     await try_send_verify_panel(ctx.guild)
 
 @setup.command()
-async def verifiedrole(ctx, role:discord.Role):
+async def verifiedrole(ctx, role: discord.Role):
     await update_setting(ctx.guild.id,"verified_role",role.id)
     await ctx.send(embed=success("Verified Role Set",role.mention))
     await try_send_verify_panel(ctx.guild)
