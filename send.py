@@ -215,5 +215,59 @@ async def setupall(ctx):
     await ticket_panel.send(embed=info("Support Tickets","Click below."), view=TicketView())
 
     await ctx.send(embed=success("Setup Complete","Server fully configured."))
+# ================= ROLE TOGGLE (DYNO STYLE) =================
+@bot.command(name="role")
+@commands.has_permissions(manage_roles=True)
+async def role_toggle(ctx, member: discord.Member, role: discord.Role):
 
+    # Bot hierarchy check
+    if role >= ctx.guild.me.top_role:
+        return await ctx.send(embed=error(
+            "Hierarchy Error",
+            "That role is higher than my highest role."
+        ))
+
+    # Moderator hierarchy check
+    if role >= ctx.author.top_role and ctx.author != ctx.guild.owner:
+        return await ctx.send(embed=error(
+            "Hierarchy Error",
+            "You cannot manage a role equal or higher than your highest role."
+        ))
+
+    embed = discord.Embed(timestamp=datetime.utcnow())
+    embed.set_footer(
+        text=f"Moderator: {ctx.author}",
+        icon_url=ctx.author.display_avatar.url
+    )
+
+    try:
+        if role in member.roles:
+            await member.remove_roles(role, reason=f"Role toggled by {ctx.author}")
+            embed.title = "Role Removed"
+            embed.description = f"{role.mention} removed from {member.mention}"
+            embed.color = discord.Color.red()
+        else:
+            await member.add_roles(role, reason=f"Role toggled by {ctx.author}")
+            embed.title = "Role Added"
+            embed.description = f"{role.mention} added to {member.mention}"
+            embed.color = discord.Color.green()
+
+        await ctx.send(embed=embed)
+
+        # Log it
+        await log(
+            ctx.guild,
+            log_embed(
+                "Role Toggled",
+                f"User: {member.mention}\n"
+                f"Role: {role.mention}\n"
+                f"Moderator: {ctx.author.mention}"
+            )
+        )
+
+    except discord.Forbidden:
+        await ctx.send(embed=error(
+            "Permission Error",
+            "I do not have permission to manage this role."
+        ))
 bot.run(TOKEN)
