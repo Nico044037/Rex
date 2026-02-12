@@ -29,6 +29,7 @@ if not os.path.exists(DATA_FILE):
                 "welcome_channel": None,
                 "verify_channel": None,
                 "verified_role": None,
+                "logs_channel": None,
                 "autoroles": []
             },
             f
@@ -40,6 +41,7 @@ with open(DATA_FILE, "r") as f:
 welcome_channel_id: int | None = data.get("welcome_channel")
 verify_channel_id: int | None = data.get("verify_channel")
 verified_role_id: int | None = data.get("verified_role")
+logs_channel_id: int | None = data.get("logs_channel")
 autoroles: set[int] = set(data.get("autoroles", []))
 
 
@@ -50,11 +52,20 @@ def save_data():
                 "welcome_channel": welcome_channel_id,
                 "verify_channel": verify_channel_id,
                 "verified_role": verified_role_id,
+                "logs_channel": logs_channel_id,
                 "autoroles": list(autoroles)
             },
             f,
             indent=4
         )
+
+# ================= LOG FUNCTION =================
+async def send_log(guild: discord.Guild, embed: discord.Embed):
+    if not logs_channel_id:
+        return
+    channel = guild.get_channel(logs_channel_id)
+    if channel:
+        await channel.send(embed=embed)
 
 # ================= EMBEDS =================
 def rules_embed():
@@ -92,6 +103,7 @@ class VerifyView(discord.ui.View):
         custom_id="verify_button"
     )
     async def verify_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+
         if not verified_role_id:
             return await interaction.response.send_message(
                 "❌ Verified role not set.",
@@ -114,10 +126,21 @@ class VerifyView(discord.ui.View):
 
         try:
             await interaction.user.add_roles(role, reason="User verified")
+
             await interaction.response.send_message(
                 "🎉 You are now verified!",
                 ephemeral=True
             )
+
+            # Log verification
+            embed = discord.Embed(
+                title="🔐 Member Verified",
+                description=f"{interaction.user.mention} has verified.",
+                color=discord.Color.blue()
+            )
+            embed.add_field(name="User ID", value=interaction.user.id)
+            await send_log(interaction.guild, embed)
+
         except:
             await interaction.response.send_message(
                 "❌ I cannot assign that role.",
@@ -138,7 +161,7 @@ async def on_member_join(member: discord.Member):
 
     await asyncio.sleep(2)
 
-    # DM rules
+    # DM Rules
     try:
         await member.send(embed=rules_embed())
     except:
@@ -152,12 +175,38 @@ async def on_member_join(member: discord.Member):
                 f"👋 Welcome {member.mention}!\n📜 Check your DMs ❤️"
             )
 
+    # Log join
+    embed = discord.Embed(
+        title="📥 Member Joined",
+        description=f"{member.mention} joined the server.",
+        color=discord.Color.green()
+    )
+    embed.add_field(name="User ID", value=member.id)
+    embed.set_footer(text=f"Account created: {member.created_at.strftime('%Y-%m-%d')}")
+    await send_log(member.guild, embed)
+
+# ================= MEMBER LEAVE =================
+@bot.event
+async def on_member_remove(member: discord.Member):
+    embed = discord.Embed(
+        title="📤 Member Left",
+        description=f"{member} left the server.",
+        color=discord.Color.red()
+    )
+    embed.add_field(name="User ID", value=member.id)
+    await send_log(member.guild, embed)
+
 # ================= SETUP GROUP =================
 @bot.group(invoke_without_command=True)
 @commands.has_permissions(manage_guild=True)
 async def setup(ctx):
-    await ctx.send("Use: `!setup welcome #channel`, `!setup verify #channel`, `!setup verifiedrole @role`")
-
+    await ctx.send(
+        "Use:\n"
+        "`!setup welcome #channel`\n"
+        "`!setup verify #channel`\n"
+        "`!setup verifiedrole @role`\n"
+        "`!setup logs #channel`"
+    )
 
 @setup.command()
 @commands.has_permissions(manage_guild=True)
@@ -167,7 +216,6 @@ async def welcome(ctx, channel: discord.TextChannel):
     save_data()
     await ctx.send(f"✅ Welcome channel set to {channel.mention}")
 
-
 @setup.command()
 @commands.has_permissions(manage_guild=True)
 async def verify(ctx, channel: discord.TextChannel):
@@ -175,7 +223,6 @@ async def verify(ctx, channel: discord.TextChannel):
     verify_channel_id = channel.id
     save_data()
     await ctx.send(f"✅ Verify channel set to {channel.mention}")
-
 
 @setup.command()
 @commands.has_permissions(manage_roles=True)
@@ -189,6 +236,14 @@ async def verifiedrole(ctx, role: discord.Role):
     save_data()
     await ctx.send(f"✅ Verified role set to {role.mention}")
 
+@setup.command()
+@commands.has_permissions(manage_guild=True)
+async def logs(ctx, channel: discord.TextChannel):
+    global logs_channel_id
+    logs_channel_id = channel.id
+    save_data()
+    await ctx.send(f"✅ Logs channel set to {channel.mention}")
+
 # ================= SEND VERIFY PANEL =================
 @bot.command()
 @commands.has_permissions(manage_guild=True)
@@ -197,7 +252,6 @@ async def verify(ctx):
         return await ctx.send("❌ Verify channel not set.")
 
     channel = ctx.guild.get_channel(verify_channel_id)
-
     if not channel:
         return await ctx.send("❌ Channel not found.")
 
@@ -221,6 +275,7 @@ async def autorole(ctx, action: str, role: discord.Role):
         autoroles.add(role.id)
         save_data()
         await ctx.send("✅ Autorole added")
+
     elif action.lower() == "remove":
         autoroles.discard(role.id)
         save_data()
@@ -233,6 +288,17 @@ async def kick(ctx, member: discord.Member, *, reason="No reason provided"):
     try:
         await member.kick(reason=reason)
         await ctx.send(f"👢 Kicked {member.mention}")
+
+        embed = discord.Embed(
+            title="👢 Member Kicked",
+            color=discord.Color.orange()
+        )
+        embed.add_field(name="User", value=f"{member} ({member.id})", inline=False)
+        embed.add_field(name="Moderator", value=ctx.author.mention, inline=False)
+        embed.add_field(name="Reason", value=reason, inline=False)
+
+        await send_log(ctx.guild, embed)
+
     except:
         await ctx.send("❌ Cannot kick this user.")
 
