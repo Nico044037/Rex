@@ -1,9 +1,11 @@
 import os
 import asyncio
 import asyncpg
+import aiohttp
 import discord
 from discord.ext import commands
 from discord.ui import View, Button, Modal, TextInput
+from datetime import datetime
 import io
 
 # ================= ENV =================
@@ -11,12 +13,12 @@ TOKEN = os.getenv("DISCORD_TOKEN")
 DATABASE_URL = os.getenv("DATABASE_URL")
 
 intents = discord.Intents.all()
-bot = commands.Bot(command_prefix=["!", "?"], intents=intents)
+bot = commands.Bot(command_prefix=["!", "?", "$"], intents=intents, help_command=None)
 
 db = None
 ticket_owners = {}
 
-# ================= EMBED SYSTEM =================
+# ================= EMBEDS =================
 def success(t,d): return discord.Embed(title=f"✅ {t}",description=d,color=discord.Color.green())
 def error(t,d): return discord.Embed(title=f"❌ {t}",description=d,color=discord.Color.red())
 def info(t,d): return discord.Embed(title=f"ℹ️ {t}",description=d,color=discord.Color.blurple())
@@ -45,7 +47,7 @@ async def on_ready():
     bot.add_view(TicketView())
     bot.add_view(CloseView())
 
-    print("Bot ready (Public PostgreSQL Version)")
+    print("Bot ready (FULL PUBLIC VERSION)")
 
 async def get_settings(guild_id):
     row = await db.fetchrow("SELECT * FROM guild_settings WHERE guild_id=$1", guild_id)
@@ -55,10 +57,7 @@ async def get_settings(guild_id):
     return row
 
 async def update_setting(guild_id, column, value):
-    await db.execute(
-        f"UPDATE guild_settings SET {column}=$1 WHERE guild_id=$2",
-        value, guild_id
-    )
+    await db.execute(f"UPDATE guild_settings SET {column}=$1 WHERE guild_id=$2", value, guild_id)
 
 # ================= LOG FUNCTION =================
 async def log(guild, embed, file=None):
@@ -68,19 +67,103 @@ async def log(guild, embed, file=None):
         if ch:
             await ch.send(embed=embed, file=file)
 
-# ================= RULES =================
-def rules_embed():
-    e = discord.Embed(
-        title="📜 Server Rules",
-        description="By staying you agree to follow these rules.",
-        color=discord.Color.red()
+# ================= HELP =================
+@bot.command(name="help")
+async def help_command(ctx):
+    embed = discord.Embed(title="📖 Help Menu", color=discord.Color.blurple())
+
+    embed.add_field(
+        name="Moderation",
+        value="`?kick @user`\n`?ban @user`\n`?role @user @role`\n`?purge amount`\n`?clear`",
+        inline=False
     )
-    e.add_field(name="Respect", value="No harassment or hate.", inline=False)
-    e.add_field(name="No Spam", value="No flooding channels.", inline=False)
-    e.add_field(name="No NSFW", value="Keep content safe.", inline=False)
-    e.add_field(name="No Advertising", value="No promotion.", inline=False)
-    e.set_footer(text="Breaking rules may result in punishment.")
-    return e
+
+    embed.add_field(
+        name="Server Setup",
+        value="`!setup welcome`\n`!setup verify`\n`!setup verifiedrole`\n`!setup logs`\n`!setup ticket`\n`!antinuke`",
+        inline=False
+    )
+
+    embed.add_field(
+        name="Minecraft",
+        value="`$sudo info <username>`\n`$sudo head <username>`",
+        inline=False
+    )
+
+    await ctx.send(embed=embed)
+
+# ================= ROLE TOGGLE =================
+@bot.command()
+@commands.has_permissions(manage_roles=True)
+async def role(ctx, member: discord.Member, role: discord.Role):
+
+    if role >= ctx.guild.me.top_role:
+        return await ctx.send(embed=error("Error","I cannot manage that role."))
+
+    embed = discord.Embed(color=discord.Color.blurple())
+    embed.timestamp = datetime.utcnow()
+    embed.set_footer(text=f"Moderator: {ctx.author}", icon_url=ctx.author.display_avatar.url)
+
+    if role in member.roles:
+        await member.remove_roles(role)
+        embed.title = "Role Removed"
+        embed.color = discord.Color.red()
+    else:
+        await member.add_roles(role)
+        embed.title = "Role Added"
+        embed.color = discord.Color.green()
+
+    embed.description = f"**Member:** {member.mention}\n**Role:** {role.mention}"
+    await ctx.send(embed=embed)
+
+# ================= SUDO GROUP =================
+@bot.group(name="sudo")
+async def sudo(ctx):
+    if ctx.invoked_subcommand is None:
+        await ctx.send(embed=info("Sudo Commands","Subcommands: info, head"))
+
+@sudo.command(name="info")
+@commands.has_permissions(administrator=True)
+async def sudo_info(ctx, mc_username: str):
+
+    await ctx.send(embed=info("Fetching","Getting Minecraft data..."))
+
+    async with aiohttp.ClientSession() as session:
+        async with session.get(f"https://api.mojang.com/users/profiles/minecraft/{mc_username}") as response:
+
+            if response.status != 200:
+                return await ctx.send(embed=error("Error","Minecraft account not found."))
+
+            data = await response.json()
+            uuid_raw = data.get("id")
+
+            uuid = f"{uuid_raw[:8]}-{uuid_raw[8:12]}-{uuid_raw[12:16]}-{uuid_raw[16:20]}-{uuid_raw[20:]}"
+
+    embed = discord.Embed(title="🎮 Minecraft Account Info", color=discord.Color.green())
+    embed.add_field(name="Username", value=mc_username, inline=False)
+    embed.add_field(name="UUID", value=uuid, inline=False)
+    embed.set_thumbnail(url=f"https://mc-heads.net/head/{uuid}")
+    embed.set_image(url=f"https://mc-heads.net/body/{uuid}")
+
+    await ctx.send(embed=embed)
+
+@sudo.command(name="head")
+@commands.has_permissions(administrator=True)
+async def sudo_head(ctx, mc_username: str):
+
+    async with aiohttp.ClientSession() as session:
+        async with session.get(f"https://api.mojang.com/users/profiles/minecraft/{mc_username}") as response:
+
+            if response.status != 200:
+                return await ctx.send(embed=error("Error","Minecraft account not found."))
+
+            data = await response.json()
+            uuid_raw = data.get("id")
+            uuid = f"{uuid_raw[:8]}-{uuid_raw[8:12]}-{uuid_raw[12:16]}-{uuid_raw[16:20]}-{uuid_raw[20:]}"
+
+    embed = discord.Embed(title=f"🧠 {mc_username}'s Head", color=discord.Color.blue())
+    embed.set_image(url=f"https://mc-heads.net/head/{uuid}")
+    await ctx.send(embed=embed)
 
 # ================= VERIFY =================
 class VerifyView(View):
@@ -89,186 +172,18 @@ class VerifyView(View):
     @discord.ui.button(label="Verify", style=discord.ButtonStyle.green, custom_id="verify_btn")
     async def verify(self, interaction, button):
         settings = await get_settings(interaction.guild.id)
-        role_id = settings["verified_role"]
-        if not role_id:
-            return await interaction.response.send_message(embed=error("Error","Verified role not set."),ephemeral=True)
-
-        role = interaction.guild.get_role(role_id)
+        role = interaction.guild.get_role(settings["verified_role"])
         await interaction.user.add_roles(role)
         await interaction.response.send_message(embed=success("Verified","Access granted."),ephemeral=True)
-        await log(interaction.guild, log_embed("User Verified",interaction.user.mention))
 
-# ================= TICKETS =================
-async def create_transcript(channel):
-    messages = []
-    async for msg in channel.history(limit=None, oldest_first=True):
-        messages.append(f"[{msg.created_at}] {msg.author}: {msg.content}")
-    data = "\n".join(messages)
-    return discord.File(io.BytesIO(data.encode()), filename=f"{channel.name}.txt")
-
-class CloseModal(Modal):
-    def __init__(self, channel):
-        super().__init__(title="Close Ticket")
-        self.channel = channel
-        self.reason = TextInput(label="Reason", style=discord.TextStyle.paragraph)
-        self.add_item(self.reason)
-
-    async def on_submit(self, interaction):
-        transcript = await create_transcript(self.channel)
-        await log(interaction.guild,
-                  log_embed("Ticket Closed",
-                            f"{self.channel.name}\nReason: {self.reason.value}"),
-                  transcript)
-        await self.channel.delete()
-
-class CloseView(View):
-    def __init__(self): super().__init__(timeout=None)
-
-    @discord.ui.button(label="Close Ticket", style=discord.ButtonStyle.danger, custom_id="close_ticket")
-    async def close_ticket(self, interaction, button):
-        owner = ticket_owners.get(interaction.channel.id)
-        if interaction.user.id != owner and not interaction.user.guild_permissions.administrator:
-            return await interaction.response.send_message(embed=error("Denied","Only owner/admin."),ephemeral=True)
-        await interaction.response.send_modal(CloseModal(interaction.channel))
-
-class TicketView(View):
-    def __init__(self): super().__init__(timeout=None)
-
-    @discord.ui.button(label="Create Ticket", style=discord.ButtonStyle.primary, custom_id="create_ticket")
-    async def create_ticket(self, interaction, button):
-        settings = await get_settings(interaction.guild.id)
-        if not settings["ticket_category"]:
-            return await interaction.response.send_message(embed=error("Error","Ticket system not set."),ephemeral=True)
-
-        category = interaction.guild.get_channel(settings["ticket_category"])
-        channel = await interaction.guild.create_text_channel(
-            f"ticket-{interaction.user.name}",
-            category=category
-        )
-
-        ticket_owners[channel.id] = interaction.user.id
-
-        await channel.set_permissions(interaction.guild.default_role, view_channel=False)
-        await channel.set_permissions(interaction.user, view_channel=True)
-
-        await channel.send(embed=info("Ticket Opened","Describe your issue."),view=CloseView())
-        await interaction.response.send_message(embed=success("Ticket Created",channel.mention),ephemeral=True)
-
-# ================= EVENTS =================
+# ================= START =================
 @bot.event
-async def on_member_join(member):
-    try:
-        await member.send(embed=rules_embed())
-    except:
-        pass
-
-    settings = await get_settings(member.guild.id)
-    if settings["welcome_channel"]:
-        ch = member.guild.get_channel(settings["welcome_channel"])
-        if ch:
-            await ch.send(embed=success("New Member",member.mention))
-
-    await log(member.guild, log_embed("Member Joined",member.mention))
-
-@bot.event
-async def on_member_remove(member):
-    await log(member.guild, log_embed("Member Left",str(member)))
-
-@bot.event
-async def on_message_delete(message):
-    if message.author.bot: return
-    await log(message.guild,
-              log_embed("Message Deleted",
-                        f"{message.author} in {message.channel.mention}\n{message.content}"))
-
-@bot.event
-async def on_message_edit(before, after):
-    if before.author.bot: return
-    await log(before.guild,
-              log_embed("Message Edited",
-                        f"{before.author}\nBefore: {before.content}\nAfter: {after.content}"))
-
-# ================= ANTI-NUKE =================
-@bot.event
-async def on_guild_channel_delete(channel):
-    settings = await get_settings(channel.guild.id)
-    if not settings["antinuke"]: return
-    async for entry in channel.guild.audit_logs(limit=1, action=discord.AuditLogAction.channel_delete):
-        await channel.guild.ban(entry.user, reason="Anti-nuke")
-        await log(channel.guild, log_embed("Anti-Nuke Triggered",f"{entry.user} banned."))
-
-# ================= COMMANDS =================
-@bot.group()
-async def setup(ctx): pass
-
-@setup.command()
-async def welcome(ctx, channel:discord.TextChannel):
-    await update_setting(ctx.guild.id,"welcome_channel",channel.id)
-    await ctx.send(embed=success("Welcome Channel Set",channel.mention))
-
-@setup.command()
-async def verify(ctx, channel:discord.TextChannel):
-    await update_setting(ctx.guild.id,"verify_channel",channel.id)
-    await ctx.send(embed=success("Verify Channel Set",channel.mention))
-
-@setup.command()
-async def verifiedrole(ctx, role:discord.Role):
-    await update_setting(ctx.guild.id,"verified_role",role.id)
-    await ctx.send(embed=success("Verified Role Set",role.mention))
-
-@setup.command()
-async def logs(ctx, channel:discord.TextChannel):
-    await update_setting(ctx.guild.id,"logs_channel",channel.id)
-    await ctx.send(embed=success("Logs Channel Set",channel.mention))
-
-@setup.command()
-async def rules(ctx, channel:discord.TextChannel):
-    await update_setting(ctx.guild.id,"rules_channel",channel.id)
-    await channel.send(embed=rules_embed())
-    await ctx.send(embed=success("Rules Sent",channel.mention))
-
-@setup.command()
-async def ticket(ctx):
-    category = await ctx.guild.create_category("Tickets")
-    await update_setting(ctx.guild.id,"ticket_category",category.id)
-    panel = await ctx.guild.create_text_channel("ticket-panel",category=category)
-    await panel.send(embed=info("Ticket System","Click below."),view=TicketView())
-    await ctx.send(embed=success("Ticket System Created",panel.mention))
-
-@bot.command()
-async def antinuke(ctx):
-    settings = await get_settings(ctx.guild.id)
-    new = not settings["antinuke"]
-    await update_setting(ctx.guild.id,"antinuke",new)
-    await ctx.send(embed=success("Anti-Nuke Toggled",str(new)))
-
-@bot.command()
-@commands.has_permissions(manage_messages=True)
-async def purge(ctx, amount:int):
-    deleted = await ctx.channel.purge(limit=amount)
-    await ctx.send(embed=success("Purged",f"{len(deleted)} messages."))
-
-@bot.command()
-@commands.has_permissions(manage_channels=True)
-async def clear(ctx):
-    old = ctx.channel
-    new = await old.clone()
-    await new.edit(position=old.position,category=old.category)
-    await old.delete()
-
-@bot.command()
-@commands.has_permissions(kick_members=True)
-async def kick(ctx, member:discord.Member, *, reason="No reason"):
-    await member.kick(reason=reason)
-    await ctx.send(embed=success("User Kicked",member.mention))
-
-@bot.command(name="send")
-@commands.has_permissions(administrator=True)
-async def send(ctx, user:discord.Member, *, message):
-    try:
-        await user.send(embed=info("Message from Server",message))
-        await ctx.send(embed=success("DM Sent",user.mention))
-    except:
-        await ctx.send(embed=error("Failed","Could not DM user."))
+async def on_command_error(ctx, error):
+    if isinstance(error, commands.MissingPermissions):
+        await ctx.send(embed=error("Permission Denied","You lack permission."))
+    elif isinstance(error, commands.CommandNotFound):
+        return
+    else:
+        await ctx.send(embed=error("Error",str(error)))
 
 bot.run(TOKEN)
