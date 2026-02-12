@@ -108,7 +108,7 @@ async def try_send_verify_panel(guild):
         ch = guild.get_channel(settings["verify_channel"])
         if ch:
             await ch.send(embed=info("Verification Required",
-                                     "Click the button below to verify."),
+                                     "Click below to verify."),
                           view=VerifyView())
 
 class VerifyView(View):
@@ -178,96 +178,42 @@ class TicketView(View):
         await channel.send(embed=info("Ticket Opened","Describe your issue."), view=CloseView())
         await interaction.response.send_message(embed=success("Created",channel.mention),ephemeral=True)
 
-# ================= EVENTS =================
-@bot.event
-async def on_member_join(member):
-    try:
-        await member.send(embed=rules_embed())
-    except:
-        pass
+# ================= SETUPALL =================
+@bot.command()
+@commands.has_permissions(administrator=True)
+async def setupall(ctx):
+    guild = ctx.guild
+    await ctx.send(embed=info("Setup Starting","Building full server system..."))
 
-    settings = await get_settings(member.guild.id)
+    verified_role = await guild.create_role(name="Verified")
+    unverified_role = await guild.create_role(name="Unverified")
+    support_role = await guild.create_role(name="Support")
 
-    if settings["welcome_channel"]:
-        ch = member.guild.get_channel(settings["welcome_channel"])
-        if ch:
-            await ch.send(embed=success("New Member Joined", member.mention))
+    info_cat = await guild.create_category("📌 Information")
+    mod_cat = await guild.create_category("🛡 Moderation")
+    ticket_cat = await guild.create_category("🎫 Tickets")
 
-    # Autoroles
-    autorole_ids = await get_autoroles(member.guild.id)
-    roles = [member.guild.get_role(r) for r in autorole_ids if member.guild.get_role(r)]
-    if roles:
-        await member.add_roles(*roles, reason="Autorole")
+    rules_ch = await guild.create_text_channel("rules", category=info_cat)
+    welcome_ch = await guild.create_text_channel("welcome", category=info_cat)
+    verify_ch = await guild.create_text_channel("verify", category=info_cat)
+    logs_ch = await guild.create_text_channel("logs", category=mod_cat)
+    ticket_panel = await guild.create_text_channel("ticket-panel", category=ticket_cat)
 
-    await log(member.guild, log_embed("Member Joined", member.mention))
+    await verify_ch.set_permissions(guild.default_role, send_messages=False)
+    await rules_ch.set_permissions(guild.default_role, send_messages=False)
 
-# ================= ROLE TOGGLE =================
-@bot.command(name="role")
-@commands.has_permissions(manage_roles=True)
-async def role_toggle(ctx, member: discord.Member, role: discord.Role):
-    if role >= ctx.guild.me.top_role:
-        return await ctx.send(embed=error("Hierarchy Error","Role higher than bot."))
+    await update_setting(guild.id,"welcome_channel",welcome_ch.id)
+    await update_setting(guild.id,"logs_channel",logs_ch.id)
+    await update_setting(guild.id,"rules_channel",rules_ch.id)
+    await update_setting(guild.id,"verify_channel",verify_ch.id)
+    await update_setting(guild.id,"verified_role",verified_role.id)
+    await update_setting(guild.id,"ticket_category",ticket_cat.id)
+    await update_setting(guild.id,"antinuke",True)
 
-    if role in member.roles:
-        await member.remove_roles(role)
-        await ctx.send(embed=success("Role Removed", f"{role.mention} removed from {member.mention}"))
-    else:
-        await member.add_roles(role)
-        await ctx.send(embed=success("Role Added", f"{role.mention} added to {member.mention}"))
+    await rules_ch.send(embed=rules_embed())
+    await verify_ch.send(embed=info("Verification Required","Click below."), view=VerifyView())
+    await ticket_panel.send(embed=info("Support Tickets","Click below."), view=TicketView())
 
-    await log(ctx.guild, log_embed("Role Toggled", f"{member.mention} → {role.mention}"))
-
-# ================= SETUP =================
-@bot.group()
-async def setup(ctx): pass
-
-@setup.command()
-async def logs(ctx, channel:discord.TextChannel):
-    await update_setting(ctx.guild.id,"logs_channel",channel.id)
-    await ctx.send(embed=success("Logs Channel Set",channel.mention))
-
-@setup.command()
-async def welcome(ctx, channel:discord.TextChannel):
-    await update_setting(ctx.guild.id,"welcome_channel",channel.id)
-    await ctx.send(embed=success("Welcome Channel Set",channel.mention))
-
-@setup.command()
-async def rules(ctx, channel:discord.TextChannel):
-    await update_setting(ctx.guild.id,"rules_channel",channel.id)
-    await channel.send(embed=rules_embed())
-    await ctx.send(embed=success("Rules Sent",channel.mention))
-
-@setup.command()
-async def verify(ctx, channel:discord.TextChannel):
-    await update_setting(ctx.guild.id,"verify_channel",channel.id)
-    await ctx.send(embed=success("Verify Channel Set",channel.mention))
-    await try_send_verify_panel(ctx.guild)
-
-@setup.command()
-async def verifiedrole(ctx, role:discord.Role):
-    await update_setting(ctx.guild.id,"verified_role",role.id)
-    await ctx.send(embed=success("Verified Role Set",role.mention))
-    await try_send_verify_panel(ctx.guild)
-
-@setup.command()
-async def ticket(ctx):
-    category = await ctx.guild.create_category("Tickets")
-    await update_setting(ctx.guild.id,"ticket_category",category.id)
-    panel = await ctx.guild.create_text_channel("ticket-panel",category=category)
-    await panel.send(embed=info("Support Tickets","Click below to create a ticket."),view=TicketView())
-    await ctx.send(embed=success("Ticket System Created",panel.mention))
-
-@setup.group()
-async def autorole(ctx): pass
-
-@autorole.command(name="add")
-async def autorole_add(ctx, role:discord.Role):
-    await add_autorole(ctx.guild.id, role.id)
-    await ctx.send(embed=success("Autorole Added", role.mention))
-
-@autorole.command(name="remove")
-async def autorole_remove(ctx, role:discord.Role):
-    await remove_autorole(ctx.guild.id, role.id)
-    await ctx.send(embed=success("Autorole Removed", role.mention))
+    await ctx.send(embed=success("Setup Complete","Server fully configured."))
 
 bot.run(TOKEN)
