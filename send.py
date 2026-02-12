@@ -14,14 +14,27 @@ intents.message_content = True
 
 bot = commands.Bot(command_prefix=["!", "?"], intents=intents)
 
+# ================= EMBED SYSTEM =================
+def success(title, desc):
+    return discord.Embed(title=f"✅ {title}", description=desc, color=discord.Color.green())
+
+def error(title, desc):
+    return discord.Embed(title=f"❌ {title}", description=desc, color=discord.Color.red())
+
+def info(title, desc):
+    return discord.Embed(title=f"ℹ️ {title}", description=desc, color=discord.Color.blurple())
+
+def log_embed(title, desc):
+    return discord.Embed(title=f"📜 {title}", description=desc, color=discord.Color.orange())
+
 # ================= STORAGE =================
 default_data = {
     "welcome_channel": None,
     "verify_channel": None,
     "verified_role": None,
     "logs_channel": None,
+    "rules_channel": None,
     "ticket_category": None,
-    "ticket_panel": None,
     "antinuke": False
 }
 
@@ -36,8 +49,8 @@ welcome_channel_id = data["welcome_channel"]
 verify_channel_id = data["verify_channel"]
 verified_role_id = data["verified_role"]
 logs_channel_id = data["logs_channel"]
+rules_channel_id = data["rules_channel"]
 ticket_category_id = data["ticket_category"]
-ticket_panel_id = data["ticket_panel"]
 antinuke_enabled = data["antinuke"]
 
 ticket_owners = {}
@@ -49,8 +62,8 @@ def save():
             "verify_channel": verify_channel_id,
             "verified_role": verified_role_id,
             "logs_channel": logs_channel_id,
+            "rules_channel": rules_channel_id,
             "ticket_category": ticket_category_id,
-            "ticket_panel": ticket_panel_id,
             "antinuke": antinuke_enabled
         }, f, indent=4)
 
@@ -61,25 +74,19 @@ async def log(guild, embed):
     if ch:
         await ch.send(embed=embed)
 
-# ================= RULES EMBED =================
+# ================= RULES =================
 def rules_embed():
     embed = discord.Embed(
         title="📜 Server Rules",
-        description="Please read before participating.",
+        description="Please read carefully before participating.",
         color=discord.Color.red()
     )
-    embed.add_field(
-        name="Rules",
-        value=(
-            "1️⃣ Be respectful\n"
-            "2️⃣ No spamming\n"
-            "3️⃣ No NSFW\n"
-            "4️⃣ No advertising\n"
-            "5️⃣ No illegal content\n"
-            "6️⃣ Staff decisions are final"
-        ),
-        inline=False
-    )
+    embed.add_field(name="🔹 Respect", value="Be respectful to everyone.", inline=False)
+    embed.add_field(name="🔹 No Spam", value="Do not spam.", inline=False)
+    embed.add_field(name="🔹 No NSFW", value="No NSFW content.", inline=False)
+    embed.add_field(name="🔹 No Advertising", value="No self promotion.", inline=False)
+    embed.add_field(name="🔹 Follow TOS", value="Follow Discord Terms.", inline=False)
+    embed.set_footer(text="By staying you agree to these rules.")
     return embed
 
 # ================= VERIFY =================
@@ -88,14 +95,15 @@ class VerifyView(View):
         super().__init__(timeout=None)
 
     @discord.ui.button(label="Verify", style=discord.ButtonStyle.green, custom_id="verify_btn")
-    async def verify(self, interaction: discord.Interaction, button: Button):
+    async def verify(self, interaction, button):
         role = interaction.guild.get_role(verified_role_id)
-        if role:
-            await interaction.user.add_roles(role)
-            await interaction.response.send_message("✅ Verified!", ephemeral=True)
+        if not role:
+            return await interaction.response.send_message(embed=error("Error", "Verified role not set."), ephemeral=True)
 
-            embed = discord.Embed(title="🔐 Verified", description=interaction.user.mention)
-            await log(interaction.guild, embed)
+        await interaction.user.add_roles(role)
+        await interaction.response.send_message(embed=success("Verified", "You now have access."), ephemeral=True)
+
+        await log(interaction.guild, log_embed("User Verified", interaction.user.mention))
 
 # ================= TICKETS =================
 class CloseModal(Modal):
@@ -106,12 +114,7 @@ class CloseModal(Modal):
         self.add_item(self.reason)
 
     async def on_submit(self, interaction):
-        embed = discord.Embed(
-            title="🔒 Ticket Closed",
-            description=f"Reason:\n{self.reason.value}",
-            color=discord.Color.red()
-        )
-        await self.channel.send(embed=embed)
+        await self.channel.send(embed=info("Ticket Closed", f"Reason:\n{self.reason.value}"))
         await asyncio.sleep(2)
         await self.channel.delete()
 
@@ -119,11 +122,12 @@ class CloseView(View):
     def __init__(self):
         super().__init__(timeout=None)
 
-    @discord.ui.button(label="Close", style=discord.ButtonStyle.danger, custom_id="close_ticket")
+    @discord.ui.button(label="Close Ticket", style=discord.ButtonStyle.danger, custom_id="close_ticket")
     async def close_ticket(self, interaction, button):
         owner = ticket_owners.get(interaction.channel.id)
         if interaction.user.id != owner and not interaction.user.guild_permissions.administrator:
-            return await interaction.response.send_message("Not allowed.", ephemeral=True)
+            return await interaction.response.send_message(embed=error("Permission Denied", "Only owner or admin."), ephemeral=True)
+
         await interaction.response.send_modal(CloseModal(interaction.channel))
 
 class TicketView(View):
@@ -134,7 +138,7 @@ class TicketView(View):
     async def create_ticket(self, interaction, button):
         category = interaction.guild.get_channel(ticket_category_id)
         if not category:
-            return await interaction.response.send_message("Ticket not set.", ephemeral=True)
+            return await interaction.response.send_message(embed=error("Error", "Ticket system not set."), ephemeral=True)
 
         channel = await interaction.guild.create_text_channel(
             f"ticket-{interaction.user.name}",
@@ -146,12 +150,8 @@ class TicketView(View):
         await channel.set_permissions(interaction.guild.default_role, view_channel=False)
         await channel.set_permissions(interaction.user, view_channel=True)
 
-        await channel.send(
-            embed=discord.Embed(title="🎫 Ticket Opened"),
-            view=CloseView()
-        )
-
-        await interaction.response.send_message(f"Created {channel.mention}", ephemeral=True)
+        await channel.send(embed=info("Ticket Opened", "Describe your issue below."), view=CloseView())
+        await interaction.response.send_message(embed=success("Ticket Created", channel.mention), ephemeral=True)
 
 # ================= READY =================
 @bot.event
@@ -172,15 +172,13 @@ async def on_member_join(member):
     if welcome_channel_id:
         ch = member.guild.get_channel(welcome_channel_id)
         if ch:
-            await ch.send(f"👋 Welcome {member.mention}")
+            await ch.send(embed=success("New Member", f"Welcome {member.mention}!"))
 
-    embed = discord.Embed(title="📥 Member Joined", description=member.mention)
-    await log(member.guild, embed)
+    await log(member.guild, log_embed("Member Joined", member.mention))
 
 @bot.event
 async def on_member_remove(member):
-    embed = discord.Embed(title="📤 Member Left", description=str(member))
-    await log(member.guild, embed)
+    await log(member.guild, log_embed("Member Left", str(member)))
 
 # ================= ANTI NUKE =================
 @bot.event
@@ -189,8 +187,7 @@ async def on_guild_channel_delete(channel):
         return
     async for entry in channel.guild.audit_logs(limit=1, action=discord.AuditLogAction.channel_delete):
         await channel.guild.ban(entry.user, reason="Anti-nuke")
-        embed = discord.Embed(title="🛡 Anti-Nuke", description=f"{entry.user} banned.")
-        await log(channel.guild, embed)
+        await log(channel.guild, log_embed("Anti-Nuke Triggered", f"{entry.user} banned."))
 
 @bot.event
 async def on_guild_role_delete(role):
@@ -198,8 +195,7 @@ async def on_guild_role_delete(role):
         return
     async for entry in role.guild.audit_logs(limit=1, action=discord.AuditLogAction.role_delete):
         await role.guild.ban(entry.user, reason="Anti-nuke")
-        embed = discord.Embed(title="🛡 Anti-Nuke", description=f"{entry.user} banned.")
-        await log(role.guild, embed)
+        await log(role.guild, log_embed("Anti-Nuke Triggered", f"{entry.user} banned."))
 
 # ================= COMMANDS =================
 @bot.group()
@@ -211,28 +207,36 @@ async def welcome(ctx, channel: discord.TextChannel):
     global welcome_channel_id
     welcome_channel_id = channel.id
     save()
-    await ctx.send("Set.")
+    await ctx.send(embed=success("Welcome Channel Set", channel.mention))
 
 @setup.command()
 async def verify(ctx, channel: discord.TextChannel):
     global verify_channel_id
     verify_channel_id = channel.id
     save()
-    await ctx.send("Set.")
+    await ctx.send(embed=success("Verify Channel Set", channel.mention))
 
 @setup.command()
 async def verifiedrole(ctx, role: discord.Role):
     global verified_role_id
     verified_role_id = role.id
     save()
-    await ctx.send("Set.")
+    await ctx.send(embed=success("Verified Role Set", role.mention))
 
 @setup.command()
 async def logs(ctx, channel: discord.TextChannel):
     global logs_channel_id
     logs_channel_id = channel.id
     save()
-    await ctx.send("Set.")
+    await ctx.send(embed=success("Logs Channel Set", channel.mention))
+
+@setup.command()
+async def rules(ctx, channel: discord.TextChannel):
+    global rules_channel_id
+    rules_channel_id = channel.id
+    save()
+    await channel.send(embed=rules_embed())
+    await ctx.send(embed=success("Rules Sent", channel.mention))
 
 @setup.command()
 async def ticket(ctx):
@@ -241,25 +245,27 @@ async def ticket(ctx):
     global ticket_category_id
     ticket_category_id = category.id
     save()
-    await panel.send("Create ticket:", view=TicketView())
+    await panel.send(embed=info("Ticket System", "Click below to create ticket."), view=TicketView())
+    await ctx.send(embed=success("Ticket System Created", panel.mention))
 
 @bot.command()
 async def verify(ctx):
     channel = ctx.guild.get_channel(verify_channel_id)
     if channel:
-        await channel.send("Click to verify", view=VerifyView())
+        await channel.send(embed=info("Verification Required", "Click button below."), view=VerifyView())
 
 @bot.command()
 async def antinuke(ctx):
     global antinuke_enabled
     antinuke_enabled = not antinuke_enabled
     save()
-    await ctx.send(f"Anti-nuke {'ON' if antinuke_enabled else 'OFF'}")
+    await ctx.send(embed=success("Anti-Nuke Toggled", f"Now {'ON' if antinuke_enabled else 'OFF'}"))
 
 @bot.command()
 @commands.has_permissions(manage_messages=True)
 async def purge(ctx, amount: int):
-    await ctx.channel.purge(limit=amount)
+    deleted = await ctx.channel.purge(limit=amount)
+    await ctx.send(embed=success("Messages Purged", f"Deleted {len(deleted)} messages."))
 
 @bot.command()
 @commands.has_permissions(manage_channels=True)
@@ -269,16 +275,19 @@ async def clear(ctx):
     await new.edit(position=old.position, category=old.category)
     await old.delete()
 
-@bot.command()
+@bot.command(name="send")
 @commands.has_permissions(administrator=True)
-async def senddm(ctx, user: discord.User, *, message):
-    await user.send(message)
-    await ctx.send("Sent.")
+async def send(ctx, user: discord.Member, *, message):
+    try:
+        await user.send(embed=info("Message from Server", message))
+        await ctx.send(embed=success("DM Sent", user.mention))
+    except:
+        await ctx.send(embed=error("Failed", "Could not send DM."))
 
 @bot.command()
 @commands.has_permissions(kick_members=True)
 async def kick(ctx, member: discord.Member, *, reason="No reason"):
     await member.kick(reason=reason)
-    await ctx.send("Kicked.")
+    await ctx.send(embed=success("User Kicked", member.mention))
 
 bot.run(TOKEN)
