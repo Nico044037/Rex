@@ -3,307 +3,238 @@ import json
 import asyncio
 import discord
 from discord.ext import commands
+from discord.ui import View, Button, Modal, TextInput
 
 # ================= BASIC CONFIG =================
 TOKEN = os.getenv("DISCORD_TOKEN")
-MAIN_GUILD_ID = int(os.getenv("GUILD_ID", "1452967364470505565"))
 DATA_FILE = "data.json"
 
-OWNER_ID = 123456789012345678  # <-- PUT YOUR DISCORD ID HERE
-
 intents = discord.Intents.default()
-intents.message_content = True
 intents.members = True
+intents.message_content = True
 
-bot = commands.Bot(
-    command_prefix=["!", "?", "$"],
-    intents=intents,
-    help_command=None
-)
+bot = commands.Bot(command_prefix="!", intents=intents)
 
 # ================= STORAGE =================
 if not os.path.exists(DATA_FILE):
     with open(DATA_FILE, "w") as f:
-        json.dump(
-            {
-                "welcome_channel": None,
-                "verify_channel": None,
-                "verified_role": None,
-                "logs_channel": None,
-                "autoroles": []
-            },
-            f
-        )
+        json.dump({
+            "welcome_channel": None,
+            "verify_channel": None,
+            "verified_role": None,
+            "logs_channel": None,
+            "ticket_category": None,
+            "ticket_panel": None,
+            "antinuke": False
+        }, f)
 
 with open(DATA_FILE, "r") as f:
     data = json.load(f)
 
-welcome_channel_id: int | None = data.get("welcome_channel")
-verify_channel_id: int | None = data.get("verify_channel")
-verified_role_id: int | None = data.get("verified_role")
-logs_channel_id: int | None = data.get("logs_channel")
-autoroles: set[int] = set(data.get("autoroles", []))
+welcome_channel_id = data.get("welcome_channel")
+verify_channel_id = data.get("verify_channel")
+verified_role_id = data.get("verified_role")
+logs_channel_id = data.get("logs_channel")
+ticket_category_id = data.get("ticket_category")
+ticket_panel_id = data.get("ticket_panel")
+antinuke_enabled = data.get("antinuke")
 
+ticket_owners = {}
 
-def save_data():
+def save():
     with open(DATA_FILE, "w") as f:
-        json.dump(
-            {
-                "welcome_channel": welcome_channel_id,
-                "verify_channel": verify_channel_id,
-                "verified_role": verified_role_id,
-                "logs_channel": logs_channel_id,
-                "autoroles": list(autoroles)
-            },
-            f,
-            indent=4
-        )
+        json.dump({
+            "welcome_channel": welcome_channel_id,
+            "verify_channel": verify_channel_id,
+            "verified_role": verified_role_id,
+            "logs_channel": logs_channel_id,
+            "ticket_category": ticket_category_id,
+            "ticket_panel": ticket_panel_id,
+            "antinuke": antinuke_enabled
+        }, f, indent=4)
 
-# ================= LOG FUNCTION =================
-async def send_log(guild: discord.Guild, embed: discord.Embed):
+async def log(guild, embed):
     if not logs_channel_id:
         return
-    channel = guild.get_channel(logs_channel_id)
-    if channel:
-        await channel.send(embed=embed)
+    ch = guild.get_channel(logs_channel_id)
+    if ch:
+        await ch.send(embed=embed)
 
-# ================= EMBEDS =================
-def rules_embed():
-    embed = discord.Embed(
-        title="📜 Welcome to the Server!",
-        description="Please read the rules carefully ❤️",
-        color=discord.Color.red()
-    )
-
-    embed.add_field(
-        name="💬 Discord Rules",
-        value=(
-            "🤝 Be respectful\n"
-            "🚫 No spamming\n"
-            "🔞 No NSFW\n"
-            "📢 No advertising\n"
-            "⚠️ No illegal content\n"
-            "👮 Staff decisions are final"
-        ),
-        inline=False
-    )
-
-    embed.set_footer(text="⚠️ Breaking rules may result in punishment")
-    return embed
-
-# ================= VERIFY BUTTON =================
-class VerifyView(discord.ui.View):
+# ================= VERIFY VIEW =================
+class VerifyView(View):
     def __init__(self):
         super().__init__(timeout=None)
 
-    @discord.ui.button(
-        label="Verify",
-        style=discord.ButtonStyle.green,
-        emoji="✅",
-        custom_id="verify_button"
-    )
-    async def verify_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-
-        if not verified_role_id:
-            return await interaction.response.send_message(
-                "❌ Verified role not set.",
-                ephemeral=True
-            )
-
+    @discord.ui.button(label="Verify", style=discord.ButtonStyle.green, custom_id="verify_btn")
+    async def verify(self, interaction: discord.Interaction, button: Button):
         role = interaction.guild.get_role(verified_role_id)
+        if role:
+            await interaction.user.add_roles(role)
+            await interaction.response.send_message("✅ You are verified!", ephemeral=True)
 
-        if not role:
-            return await interaction.response.send_message(
-                "❌ Role not found.",
-                ephemeral=True
-            )
+            embed = discord.Embed(title="🔐 Verified", description=f"{interaction.user.mention} verified", color=discord.Color.blue())
+            await log(interaction.guild, embed)
 
-        if role in interaction.user.roles:
-            return await interaction.response.send_message(
-                "✅ You are already verified.",
-                ephemeral=True
-            )
+# ================= TICKET CLOSE MODAL =================
+class CloseModal(Modal):
+    def __init__(self, channel):
+        super().__init__(title="Close Ticket")
+        self.channel = channel
+        self.reason = TextInput(label="Reason", style=discord.TextStyle.paragraph)
+        self.add_item(self.reason)
 
-        try:
-            await interaction.user.add_roles(role, reason="User verified")
+    async def on_submit(self, interaction: discord.Interaction):
+        embed = discord.Embed(title="🔒 Ticket Closed", description=f"Reason:\n{self.reason.value}", color=discord.Color.red())
+        await self.channel.send(embed=embed)
 
-            await interaction.response.send_message(
-                "🎉 You are now verified!",
-                ephemeral=True
-            )
+        await interaction.response.send_message("Ticket closing...", ephemeral=True)
+        await asyncio.sleep(3)
+        await self.channel.delete()
 
-            # Log verification
-            embed = discord.Embed(
-                title="🔐 Member Verified",
-                description=f"{interaction.user.mention} has verified.",
-                color=discord.Color.blue()
-            )
-            embed.add_field(name="User ID", value=interaction.user.id)
-            await send_log(interaction.guild, embed)
+# ================= TICKET VIEW =================
+class TicketView(View):
+    def __init__(self):
+        super().__init__(timeout=None)
 
-        except:
-            await interaction.response.send_message(
-                "❌ I cannot assign that role.",
-                ephemeral=True
-            )
+    @discord.ui.button(label="Create Ticket", style=discord.ButtonStyle.primary, custom_id="create_ticket")
+    async def create_ticket(self, interaction: discord.Interaction, button: Button):
+
+        category = interaction.guild.get_channel(ticket_category_id)
+        if not category:
+            return await interaction.response.send_message("Ticket category not set.", ephemeral=True)
+
+        channel = await interaction.guild.create_text_channel(
+            name=f"ticket-{interaction.user.name}",
+            category=category
+        )
+
+        ticket_owners[channel.id] = interaction.user.id
+
+        await channel.set_permissions(interaction.guild.default_role, view_channel=False)
+        await channel.set_permissions(interaction.user, view_channel=True, send_messages=True)
+
+        await channel.send(
+            embed=discord.Embed(
+                title="🎫 Ticket Opened",
+                description="Describe your issue.\nPress close when finished.",
+                color=discord.Color.green()
+            ),
+            view=CloseView()
+        )
+
+        await interaction.response.send_message(f"Ticket created: {channel.mention}", ephemeral=True)
+
+class CloseView(View):
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    @discord.ui.button(label="Close", style=discord.ButtonStyle.danger, custom_id="close_ticket")
+    async def close_ticket(self, interaction: discord.Interaction, button: Button):
+
+        owner = ticket_owners.get(interaction.channel.id)
+        is_admin = interaction.user.guild_permissions.administrator
+
+        if interaction.user.id != owner and not is_admin:
+            return await interaction.response.send_message("Only ticket owner or admin can close.", ephemeral=True)
+
+        await interaction.response.send_modal(CloseModal(interaction.channel))
 
 # ================= READY =================
 @bot.event
 async def on_ready():
     bot.add_view(VerifyView())
-    print(f"✅ Logged in as {bot.user}")
+    bot.add_view(TicketView())
+    bot.add_view(CloseView())
+    print(f"Logged in as {bot.user}")
 
-# ================= MEMBER JOIN =================
+# ================= MEMBER EVENTS =================
 @bot.event
-async def on_member_join(member: discord.Member):
-    if member.guild.id != MAIN_GUILD_ID:
+async def on_member_join(member):
+    if welcome_channel_id:
+        ch = member.guild.get_channel(welcome_channel_id)
+        if ch:
+            await ch.send(f"👋 Welcome {member.mention}")
+
+    embed = discord.Embed(title="📥 Member Joined", description=member.mention, color=discord.Color.green())
+    await log(member.guild, embed)
+
+@bot.event
+async def on_member_remove(member):
+    embed = discord.Embed(title="📤 Member Left", description=str(member), color=discord.Color.red())
+    await log(member.guild, embed)
+
+# ================= ANTI NUKE =================
+@bot.event
+async def on_guild_channel_delete(channel):
+    if not antinuke_enabled:
         return
 
-    await asyncio.sleep(2)
+    async for entry in channel.guild.audit_logs(limit=1, action=discord.AuditLogAction.channel_delete):
+        if entry.user.bot:
+            continue
+        await channel.guild.ban(entry.user, reason="Anti-Nuke: Channel deletion")
+        embed = discord.Embed(title="🛡 Anti-Nuke", description=f"{entry.user} banned for deleting channel", color=discord.Color.red())
+        await log(channel.guild, embed)
 
-    # DM Rules
-    try:
-        await member.send(embed=rules_embed())
-    except:
-        pass
-
-    # Welcome message
-    if welcome_channel_id:
-        channel = member.guild.get_channel(welcome_channel_id)
-        if channel:
-            await channel.send(
-                f"👋 Welcome {member.mention}!\n📜 Check your DMs ❤️"
-            )
-
-    # Log join
-    embed = discord.Embed(
-        title="📥 Member Joined",
-        description=f"{member.mention} joined the server.",
-        color=discord.Color.green()
-    )
-    embed.add_field(name="User ID", value=member.id)
-    embed.set_footer(text=f"Account created: {member.created_at.strftime('%Y-%m-%d')}")
-    await send_log(member.guild, embed)
-
-# ================= MEMBER LEAVE =================
-@bot.event
-async def on_member_remove(member: discord.Member):
-    embed = discord.Embed(
-        title="📤 Member Left",
-        description=f"{member} left the server.",
-        color=discord.Color.red()
-    )
-    embed.add_field(name="User ID", value=member.id)
-    await send_log(member.guild, embed)
-
-# ================= SETUP GROUP =================
+# ================= COMMANDS =================
 @bot.group(invoke_without_command=True)
-@commands.has_permissions(manage_guild=True)
 async def setup(ctx):
-    await ctx.send(
-        "Use:\n"
-        "`!setup welcome #channel`\n"
-        "`!setup verify #channel`\n"
-        "`!setup verifiedrole @role`\n"
-        "`!setup logs #channel`"
-    )
+    await ctx.send("Use subcommands.")
 
 @setup.command()
-@commands.has_permissions(manage_guild=True)
 async def welcome(ctx, channel: discord.TextChannel):
     global welcome_channel_id
     welcome_channel_id = channel.id
-    save_data()
-    await ctx.send(f"✅ Welcome channel set to {channel.mention}")
+    save()
+    await ctx.send("Welcome channel set.")
 
 @setup.command()
-@commands.has_permissions(manage_guild=True)
 async def verify(ctx, channel: discord.TextChannel):
     global verify_channel_id
     verify_channel_id = channel.id
-    save_data()
-    await ctx.send(f"✅ Verify channel set to {channel.mention}")
+    save()
+    await ctx.send("Verify channel set.")
 
 @setup.command()
-@commands.has_permissions(manage_roles=True)
 async def verifiedrole(ctx, role: discord.Role):
     global verified_role_id
-
-    if role >= ctx.guild.me.top_role:
-        return await ctx.send("❌ Role too high.")
-
     verified_role_id = role.id
-    save_data()
-    await ctx.send(f"✅ Verified role set to {role.mention}")
+    save()
+    await ctx.send("Verified role set.")
 
 @setup.command()
-@commands.has_permissions(manage_guild=True)
 async def logs(ctx, channel: discord.TextChannel):
     global logs_channel_id
     logs_channel_id = channel.id
-    save_data()
-    await ctx.send(f"✅ Logs channel set to {channel.mention}")
+    save()
+    await ctx.send("Logs channel set.")
 
-# ================= SEND VERIFY PANEL =================
+@setup.command()
+async def ticket(ctx):
+    category = await ctx.guild.create_category("Tickets")
+    channel = await ctx.guild.create_text_channel("ticket-panel", category=category)
+
+    global ticket_category_id, ticket_panel_id
+    ticket_category_id = category.id
+    ticket_panel_id = channel.id
+    save()
+
+    await channel.send("🎫 Click below to create a ticket.", view=TicketView())
+    await ctx.send("Ticket system created.")
+
 @bot.command()
-@commands.has_permissions(manage_guild=True)
 async def verify(ctx):
-    if not verify_channel_id:
-        return await ctx.send("❌ Verify channel not set.")
-
     channel = ctx.guild.get_channel(verify_channel_id)
-    if not channel:
-        return await ctx.send("❌ Channel not found.")
+    if channel:
+        await channel.send("🔐 Click to verify", view=VerifyView())
+        await ctx.send("Verify panel sent.")
 
-    embed = discord.Embed(
-        title="🔐 Server Verification",
-        description="Click the button below to verify and access the server.",
-        color=discord.Color.green()
-    )
-
-    await channel.send(embed=embed, view=VerifyView())
-    await ctx.send("✅ Verification panel sent.")
-
-# ================= AUTOROLE =================
 @bot.command()
-@commands.has_permissions(manage_roles=True)
-async def autorole(ctx, action: str, role: discord.Role):
-    if role >= ctx.guild.me.top_role:
-        return await ctx.send("❌ Role too high.")
-
-    if action.lower() == "add":
-        autoroles.add(role.id)
-        save_data()
-        await ctx.send("✅ Autorole added")
-
-    elif action.lower() == "remove":
-        autoroles.discard(role.id)
-        save_data()
-        await ctx.send("❌ Autorole removed")
-
-# ================= KICK =================
-@bot.command()
-@commands.has_permissions(kick_members=True)
-async def kick(ctx, member: discord.Member, *, reason="No reason provided"):
-    try:
-        await member.kick(reason=reason)
-        await ctx.send(f"👢 Kicked {member.mention}")
-
-        embed = discord.Embed(
-            title="👢 Member Kicked",
-            color=discord.Color.orange()
-        )
-        embed.add_field(name="User", value=f"{member} ({member.id})", inline=False)
-        embed.add_field(name="Moderator", value=ctx.author.mention, inline=False)
-        embed.add_field(name="Reason", value=reason, inline=False)
-
-        await send_log(ctx.guild, embed)
-
-    except:
-        await ctx.send("❌ Cannot kick this user.")
+async def antinuke(ctx):
+    global antinuke_enabled
+    antinuke_enabled = not antinuke_enabled
+    save()
+    await ctx.send(f"Anti-Nuke is now {'ON' if antinuke_enabled else 'OFF'}")
 
 # ================= START =================
-if not TOKEN:
-    raise RuntimeError("DISCORD_TOKEN not set")
-
 bot.run(TOKEN)
